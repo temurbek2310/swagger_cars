@@ -1,8 +1,44 @@
 const express = require("express");
 const router = express.Router();
+const path = require("path");
+const fs = require("fs");
+const jwt = require("jsonwebtoken");
 
-// Mock database
-let cars = [];
+function authenticateToken(req, res, next) {
+    const authHeader = req.headers["authorization"];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (token == null) return res.sendStatus(401);
+
+    jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, user) => {
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    })
+}
+
+// Path to the mock database
+const dbPath = path.join(__dirname, "../db.json");
+
+// Helper function to read from db.json
+const readDataFromDb = () => {
+    try {
+        const rawData = fs.readFileSync(dbPath, "utf-8");
+        return JSON.parse(rawData);  // Parse the JSON data and return it
+    } catch (err) {
+        console.error("Error reading from db.json:", err);
+        return [];  // Return an empty array in case of error
+    }
+};
+
+// Helper function to write data to db.json
+const writeDataToDb = (data) => {
+    try {
+        fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));  // Write data with pretty indentation
+    } catch (err) {
+        console.error("Error writing to db.json:", err);
+    }
+};
 
 /**
  * @swagger
@@ -16,11 +52,14 @@ let cars = [];
  *   get:
  *     tags: [Cars]
  *     summary: Get all cars
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: List of all cars.
  */
-router.get('/', (req, res) => {
+router.get("/", authenticateToken, (req, res) => {
+    const cars = readDataFromDb();  // Read data from db.json
     res.json(cars);
 });
 
@@ -30,6 +69,8 @@ router.get('/', (req, res) => {
  *   get:
  *     tags: [Cars]
  *     summary: Get a car by ID
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -43,9 +84,11 @@ router.get('/', (req, res) => {
  *       404:
  *         description: Car not found.
  */
-router.get('/:id', (req, res) => {
-    const car = cars.find(c => c.id === parseInt(req.params.id));
-    if (!car) return res.status(404).send('Car not found');
+router.get("/:id", authenticateToken, (req, res) => {
+    const cars = readDataFromDb();
+    const car = cars.find((c) => c.id === parseInt(req.params.id));
+
+    if (!car) return res.status(404).send("Car not found");
     res.json(car);
 });
 
@@ -55,6 +98,8 @@ router.get('/:id', (req, res) => {
  *   post:
  *     tags: [Cars]
  *     summary: Add a new car
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -62,12 +107,12 @@ router.get('/:id', (req, res) => {
  *           schema:
  *             type: object
  *             properties:
- *               make:
+ *               company:
  *                 type: string
  *               model:
  *                 type: string
  *               year:
- *                 type: integer
+ *                 type: number
  *               price:
  *                 type: number
  *     responses:
@@ -78,16 +123,20 @@ router.get('/:id', (req, res) => {
  *       500:
  *         description: Internal server error.
  */
-router.post('/add-car', (req, res) => {
-    const car = {
-        id: cars.length + 1,
-        make: req.body.make,
+router.post("/add-car",authenticateToken ,(req, res) => {
+    const cars = readDataFromDb();  // Read current cars data
+    const newCar = {
+        id: cars.length + 1,  // Simple ID generation logic
+        company: req.body.company,
         model: req.body.model,
         year: req.body.year,
         price: req.body.price
     };
-    cars.push(car);
-    res.status(201).json(car);
+
+    cars.push(newCar);  // Add the new car to the array
+    writeDataToDb(cars);  // Write the updated array back to db.json
+
+    res.status(201).json(newCar);  // Respond with the new car data
 });
 
 /**
@@ -96,6 +145,8 @@ router.post('/add-car', (req, res) => {
  *   put:
  *     tags: [Cars]
  *     summary: Update a car by ID
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -124,14 +175,20 @@ router.post('/add-car', (req, res) => {
  *       404:
  *         description: Car not found.
  */
-router.put('/edit-car/:id', (req, res) => {
-    const car = cars.find(c => c.id === parseInt(req.params.id));
-    if (!car) return res.status(404).send('Car not found');
-    car.make = req.body.make || car.make;
+router.put("/edit-car/:id",authenticateToken, (req, res) => {
+    const cars = readDataFromDb();
+    const car = cars.find((c) => c.id === parseInt(req.params.id));
+
+    if (!car) return res.status(404).send("Car not found");
+
+    // Update car details
+    car.company = req.body.company || car.company;
     car.model = req.body.model || car.model;
     car.year = req.body.year || car.year;
     car.price = req.body.price || car.price;
-    res.json(car);
+
+    writeDataToDb(cars);  // Write updated cars array back to db.json
+    res.json(car);  // Respond with the updated car
 });
 
 /**
@@ -139,6 +196,8 @@ router.put('/edit-car/:id', (req, res) => {
  * /api/cars/delete-car/{id}:
  *   delete:
  *     tags: [Cars]
+ *     security:
+ *       - bearerAuth: []
  *     summary: Delete a car by ID
  *     parameters:
  *       - in: path
@@ -153,11 +212,14 @@ router.put('/edit-car/:id', (req, res) => {
  *       404:
  *         description: Car not found.
  */
-router.delete('/delete-car/:id', (req, res) => {
-    const carIndex = cars.findIndex(c => c.id === parseInt(req.params.id));
+router.delete("/delete-car/:id",authenticateToken, (req, res) => {
+    const cars = readDataFromDb();
+    const carIndex = cars.findIndex((c) => c.id === parseInt(req.params.id));
+
     if (carIndex !== -1) {
-        cars.splice(carIndex, 1);
-        res.json({ message: 'Car deleted successfully' });
+        cars.splice(carIndex, 1);  // Remove car from array
+        writeDataToDb(cars);  // Write the updated array back to db.json
+        res.json({ message: "Car deleted successfully" });
     } else {
         res.status(404).send(`Car with id ${req.params.id} not found`);
     }
